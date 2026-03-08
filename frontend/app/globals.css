@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+:root {
+  --bg-primary: #000000;
+  --bg-panel: #000000;
+  --bg-surface: #080808;
+  --accent-primary: #2dd4a0;
+  --accent-secondary: #0a2619;
+  --text-primary: #d4d4d4;
+  --text-secondary: #444444;
+  --edge-default: #101010;
+  --edge-highlight: #2dd4a0;
+  --chat-user: #0a2619;
+  --chat-assistant: #050505;
+  --error: #d44040;
+  --demo-amber: #d4a02d;
+}
+
+@theme inline {
+  --color-bg-primary: var(--bg-primary);
+  --color-bg-panel: var(--bg-panel);
+  --color-bg-surface: var(--bg-surface);
+  --color-accent-primary: var(--accent-primary);
+  --color-accent-secondary: var(--accent-secondary);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-edge-default: var(--edge-default);
+  --color-edge-highlight: var(--edge-highlight);
+  --color-chat-user: var(--chat-user);
+  --color-chat-assistant: var(--chat-assistant);
+  --color-error: var(--error);
+  --color-demo-amber: var(--demo-amber);
+  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+}
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-inter), system-ui, -apple-system, sans-serif;
+}
+
+@keyframes pulse-feed {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.8; }
+}
+
+.animate-pulse-feed {
+  animation: pulse-feed 2s ease-in-out infinite;
+}
