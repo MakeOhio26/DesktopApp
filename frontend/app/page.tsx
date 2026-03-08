@@ -9,7 +9,7 @@ import LiveFeed from "@/components/LiveFeed";
 import MissionAssistant from "@/components/MissionAssistant";
 
 export default function Dashboard() {
-  const { state, setDemoMode, selectNode } = useRoverConnection();
+  const { state, setDemoMode, selectNode, subscribeToFrames } = useRoverConnection();
   const [highlightedNodeIds, setHighlightedNodeIds] = useState<string[]>([]);
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -64,6 +64,7 @@ export default function Dashboard() {
             <LiveFeed
               frame={state.latestFrame}
               airQuality={state.airQuality}
+              subscribeToFrames={state.demoMode ? undefined : subscribeToFrames}
             />
           </div>
         </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { GraphNode, GraphEdge, RoverState } from "./types";
 
 const DEMO_LABELS = [
@@ -161,15 +161,13 @@ export function useDemoMode(): RoverState {
   const [latestFrame, setLatestFrame] = useState<RoverState["latestFrame"]>(null);
   const [airQuality, setAirQuality] = useState<RoverState["airQuality"]>(null);
   const frameIdRef = useRef(0);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const prevFrameUrlRef = useRef<string | null>(null);
 
   // Mock frames — every 100ms
   useEffect(() => {
-    // Create offscreen canvas for generating fake frames
     const canvas = document.createElement("canvas");
     canvas.width = 640;
     canvas.height = 480;
-    canvasRef.current = canvas;
 
     const interval = setInterval(() => {
       frameIdRef.current += 1;
@@ -222,17 +220,28 @@ export function useDemoMode(): RoverState {
       ctx.lineTo(640, scanY);
       ctx.stroke();
 
-      const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
-      const base64 = dataUrl.split(",")[1];
-
-      setLatestFrame({
-        data: base64,
-        timestamp: now,
-        frameId: frameIdRef.current,
-      });
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) return;
+          const url = URL.createObjectURL(blob);
+          if (prevFrameUrlRef.current) {
+            URL.revokeObjectURL(prevFrameUrlRef.current);
+          }
+          prevFrameUrlRef.current = url;
+          setLatestFrame({ url, timestamp: now });
+        },
+        "image/jpeg",
+        0.7
+      );
     }, 100);
 
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      if (prevFrameUrlRef.current) {
+        URL.revokeObjectURL(prevFrameUrlRef.current);
+        prevFrameUrlRef.current = null;
+      }
+    };
   }, []);
 
   // Mock air quality — every 2s

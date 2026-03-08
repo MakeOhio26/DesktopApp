@@ -1,23 +1,82 @@
 "use client";
 
+import { useRef, useEffect, useState } from "react";
 import type { AirQualityMessage } from "@/lib/types";
 
 interface LiveFeedProps {
-  frame: { data: string; timestamp: number; frameId: number } | null;
+  frame: { url: string; timestamp: number } | null;
   airQuality: Omit<AirQualityMessage, "type"> | null;
+  subscribeToFrames?: (
+    listener: (frame: { url: string; timestamp: number }) => void
+  ) => () => void;
 }
 
-export default function LiveFeed({ frame, airQuality }: LiveFeedProps) {
+export default function LiveFeed({
+  frame,
+  airQuality,
+  subscribeToFrames,
+}: LiveFeedProps) {
+  const imgRef = useRef<HTMLImageElement>(null);
+  const timeRef = useRef<HTMLSpanElement>(null);
+  const [hasFrame, setHasFrame] = useState(!!frame);
+  const pendingFrameRef = useRef<{ url: string; timestamp: number } | null>(null);
+  const rafRef = useRef<number>(0);
+
+  // Live mode: subscribe to frame stream and update img.src directly
+  useEffect(() => {
+    if (!subscribeToFrames) return;
+
+    const tick = () => {
+      const pending = pendingFrameRef.current;
+      if (pending) {
+        pendingFrameRef.current = null;
+        if (imgRef.current) {
+          imgRef.current.src = pending.url;
+        }
+        if (timeRef.current) {
+          timeRef.current.textContent = new Date(
+            pending.timestamp
+          ).toLocaleTimeString();
+        }
+        if (!hasFrame) setHasFrame(true);
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+
+    const unsub = subscribeToFrames((f) => {
+      pendingFrameRef.current = f;
+    });
+
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      unsub();
+    };
+  }, [subscribeToFrames, hasFrame]);
+
+  // Demo mode: update from prop (already throttled at 100ms)
+  useEffect(() => {
+    if (subscribeToFrames) return; // live mode uses subscription
+    if (frame && imgRef.current) {
+      imgRef.current.src = frame.url;
+      if (!hasFrame) setHasFrame(true);
+    }
+    if (frame && timeRef.current) {
+      timeRef.current.textContent = new Date(
+        frame.timestamp
+      ).toLocaleTimeString();
+    }
+  }, [frame, subscribeToFrames, hasFrame]);
+
   return (
     <div className="relative w-full h-full rounded-xl border border-accent-secondary/40 overflow-hidden bg-bg-surface">
-      {/* Video frame */}
-      {frame ? (
-        <img
-          src={`data:image/jpeg;base64,${frame.data}`}
-          alt="Rover camera feed"
-          className="w-full h-full object-cover"
-        />
-      ) : (
+      {/* Video frame — img always mounted, hidden until first frame */}
+      <img
+        ref={imgRef}
+        alt="Rover camera feed"
+        className={`w-full h-full object-cover ${hasFrame ? "" : "hidden"}`}
+      />
+      {!hasFrame && (
         <div className="flex items-center justify-center w-full h-full">
           <span className="text-text-secondary font-mono text-sm animate-pulse-feed">
             Waiting for feed...
@@ -61,11 +120,12 @@ export default function LiveFeed({ frame, airQuality }: LiveFeedProps) {
       )}
 
       {/* Frame info — bottom left */}
-      {frame && (
+      {hasFrame && (
         <div className="absolute bottom-3 left-3 bg-bg-primary/70 backdrop-blur-sm rounded px-2 py-1">
-          <span className="text-[10px] font-mono text-text-secondary">
-            Frame {frame.frameId} · {new Date(frame.timestamp).toLocaleTimeString()}
-          </span>
+          <span
+            ref={timeRef}
+            className="text-[10px] font-mono text-text-secondary"
+          />
         </div>
       )}
     </div>

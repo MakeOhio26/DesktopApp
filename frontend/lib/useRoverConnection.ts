@@ -1,27 +1,13 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import type { RoverState, RoverMessage, GraphNode, GraphEdge } from "./types";
+import type { RoverState } from "./types";
 import { WS_URL } from "./constants";
 import { useDemoMode } from "./useDemoMode";
 
-const INITIAL_STATE: RoverState = {
-  connected: false,
-  demoMode: true,
-  latestFrame: null,
-  graph: { nodes: [], edges: [] },
-  airQuality: null,
-  selectedNodeId: null,
-};
-
 export function useRoverConnection() {
   const [demoMode, setDemoModeState] = useState(true);
-  const [wsState, setWsState] = useState<Omit<RoverState, "demoMode" | "selectedNodeId">>({
-    connected: false,
-    latestFrame: null,
-    graph: { nodes: [], edges: [] },
-    airQuality: null,
-  });
+  const [connected, setConnected] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   const demoState = useDemoMode();
@@ -29,10 +15,23 @@ export function useRoverConnection() {
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const backoffRef = useRef(1000);
 
+  // Frame state managed outside React to avoid 30fps re-renders.
+  // Components read from this ref via a callback or direct img.src update.
+  const liveFrameRef = useRef<{ url: string; timestamp: number } | null>(null);
+  const prevFrameUrlRef = useRef<string | null>(null);
+  const frameListenersRef = useRef<Set<(frame: { url: string; timestamp: number }) => void>>(new Set());
+
+  const subscribeToFrames = useCallback(
+    (listener: (frame: { url: string; timestamp: number }) => void) => {
+      frameListenersRef.current.add(listener);
+      return () => { frameListenersRef.current.delete(listener); };
+    },
+    []
+  );
+
   // WebSocket connection management
   useEffect(() => {
     if (demoMode) {
-      // Clean up any existing WebSocket when switching to demo
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
@@ -41,24 +40,28 @@ export function useRoverConnection() {
         clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
       }
+      if (prevFrameUrlRef.current) {
+        URL.revokeObjectURL(prevFrameUrlRef.current);
+        prevFrameUrlRef.current = null;
+      }
+      liveFrameRef.current = null;
+      setConnected(false);
       return;
     }
 
     function connect() {
       const ws = new WebSocket(WS_URL);
+      ws.binaryType = "blob";
       wsRef.current = ws;
 
       ws.onopen = () => {
         backoffRef.current = 1000;
-        setWsState((prev) => ({ ...prev, connected: true }));
-        // Request initial graph
-        ws.send(JSON.stringify({ type: "request_graph" }));
+        setConnected(true);
       };
 
       ws.onclose = () => {
-        setWsState((prev) => ({ ...prev, connected: false }));
+        setConnected(false);
         wsRef.current = null;
-        // Auto-reconnect with exponential backoff
         reconnectTimeoutRef.current = setTimeout(() => {
           backoffRef.current = Math.min(backoffRef.current * 2, 10000);
           connect();
@@ -70,33 +73,20 @@ export function useRoverConnection() {
       };
 
       ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data) as RoverMessage;
-          switch (msg.type) {
-            case "frame":
-              setWsState((prev) => ({
-                ...prev,
-                latestFrame: {
-                  data: msg.data,
-                  timestamp: msg.timestamp,
-                  frameId: msg.frame_id,
-                },
-              }));
-              break;
-            case "graph":
-              setWsState((prev) => ({
-                ...prev,
-                graph: { nodes: msg.nodes, edges: msg.edges },
-              }));
-              break;
-            case "air_quality": {
-              const { type: _, ...rest } = msg;
-              setWsState((prev) => ({ ...prev, airQuality: rest }));
-              break;
-            }
-          }
-        } catch {
-          // Ignore malformed messages
+        const blob = event.data as Blob;
+        const url = URL.createObjectURL(blob);
+
+        if (prevFrameUrlRef.current) {
+          URL.revokeObjectURL(prevFrameUrlRef.current);
+        }
+        prevFrameUrlRef.current = url;
+
+        const frame = { url, timestamp: Date.now() };
+        liveFrameRef.current = frame;
+
+        // Notify listeners directly — no React state update
+        for (const listener of frameListenersRef.current) {
+          listener(frame);
         }
       };
     }
@@ -112,6 +102,10 @@ export function useRoverConnection() {
         clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
       }
+      if (prevFrameUrlRef.current) {
+        URL.revokeObjectURL(prevFrameUrlRef.current);
+        prevFrameUrlRef.current = null;
+      }
     };
   }, [demoMode]);
 
@@ -123,16 +117,16 @@ export function useRoverConnection() {
     setSelectedNodeId(id);
   }, []);
 
-  const requestGraph = useCallback(() => {
-    if (!demoMode && wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: "request_graph" }));
-    }
-  }, [demoMode]);
-
-  // Compose state from the active source
   const state: RoverState = demoMode
     ? { ...demoState, selectedNodeId }
-    : { ...wsState, demoMode: false, selectedNodeId };
+    : {
+        connected,
+        demoMode: false,
+        latestFrame: liveFrameRef.current,
+        graph: { nodes: [], edges: [] },
+        airQuality: null,
+        selectedNodeId,
+      };
 
-  return { state, setDemoMode, selectNode, requestGraph };
+  return { state, setDemoMode, selectNode, subscribeToFrames };
 }
