@@ -43,6 +43,8 @@ function generateInitialGraph(): {
     label: item.label,
     category: item.category,
     confidence: randomBetween(0.6, 0.98),
+    rank: i + 1,
+    crossedOut: i >= count - 2,
     first_seen_frame: 1,
     last_seen_frame: 1,
     position: {
@@ -96,6 +98,8 @@ function mutateGraph(
         label: item.label,
         category: item.category,
         confidence: randomBetween(0.5, 0.95),
+        rank: newNodes.length + 1,
+        crossedOut: Math.random() < 0.15,
         first_seen_frame: frameId,
         last_seen_frame: frameId,
         position: {
@@ -161,6 +165,7 @@ export function useDemoMode(): RoverState {
   const [latestFrame, setLatestFrame] = useState<RoverState["latestFrame"]>(null);
   const [airQuality, setAirQuality] = useState<RoverState["airQuality"]>(null);
   const frameIdRef = useRef(0);
+  const airSampleIndexRef = useRef(0);
   const prevFrameUrlRef = useRef<string | null>(null);
 
   // Mock frames — every 100ms
@@ -249,19 +254,32 @@ export function useDemoMode(): RoverState {
     const baseValues = {
       pm25: 12,
       pm10: 25,
-      co2: 420,
       temperature: 22,
       humidity: 45,
     };
+    const co2Pattern = [680, 910, 1180, 1035, 840, 1115, 960];
 
     const emit = () => {
-      setAirQuality({
-        pm25: baseValues.pm25 + randomBetween(-2, 3),
-        pm10: baseValues.pm10 + randomBetween(-5, 5),
-        co2: baseValues.co2 + randomBetween(-20, 30),
-        temperature: baseValues.temperature + randomBetween(-1, 1.5),
-        humidity: baseValues.humidity + randomBetween(-5, 5),
-        timestamp: Date.now(),
+      const nextCo2 = co2Pattern[airSampleIndexRef.current % co2Pattern.length];
+      airSampleIndexRef.current += 1;
+
+      setAirQuality((previousAirQuality) => {
+        const co2 = nextCo2 + randomBetween(-12, 12);
+
+        return {
+          pm25: baseValues.pm25 + randomBetween(-2, 3),
+          pm10: baseValues.pm10 + randomBetween(-5, 5),
+          co2,
+          temperature: baseValues.temperature + randomBetween(-1, 1.5),
+          humidity: baseValues.humidity + randomBetween(-5, 5),
+          timestamp: Date.now(),
+          co2Trend:
+            previousAirQuality && co2 !== previousAirQuality.co2
+              ? co2 > previousAirQuality.co2
+                ? "up"
+                : "down"
+              : null,
+        };
       });
     };
 

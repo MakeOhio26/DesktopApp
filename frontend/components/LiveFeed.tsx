@@ -1,11 +1,11 @@
 "use client";
 
 import { useRef, useEffect, useState } from "react";
-import type { AirQualityMessage } from "@/lib/types";
+import type { AirQualityReading } from "@/lib/types";
 
 interface LiveFeedProps {
   frame: { url: string; timestamp: number } | null;
-  airQuality: Omit<AirQualityMessage, "type"> | null;
+  airQuality: AirQualityReading | null;
   subscribeToFrames?: (
     listener: (frame: { url: string; timestamp: number }) => void
   ) => () => void;
@@ -18,9 +18,12 @@ export default function LiveFeed({
 }: LiveFeedProps) {
   const imgRef = useRef<HTMLImageElement>(null);
   const timeRef = useRef<HTMLSpanElement>(null);
-  const [hasFrame, setHasFrame] = useState(!!frame);
+  const [hasLiveFrame, setHasLiveFrame] = useState(false);
   const pendingFrameRef = useRef<{ url: string; timestamp: number } | null>(null);
   const rafRef = useRef<number>(0);
+  const hasFrame = subscribeToFrames ? hasLiveFrame : !!frame;
+  const warningActive = (airQuality?.co2 ?? 0) > 1000;
+  const co2Trend = airQuality?.co2Trend ?? null;
 
   // Live mode: subscribe to frame stream and update img.src directly
   useEffect(() => {
@@ -38,7 +41,7 @@ export default function LiveFeed({
             pending.timestamp
           ).toLocaleTimeString();
         }
-        if (!hasFrame) setHasFrame(true);
+        setHasLiveFrame(true);
       }
       rafRef.current = requestAnimationFrame(tick);
     };
@@ -51,25 +54,31 @@ export default function LiveFeed({
     return () => {
       cancelAnimationFrame(rafRef.current);
       unsub();
+      setHasLiveFrame(false);
     };
-  }, [subscribeToFrames, hasFrame]);
+  }, [subscribeToFrames]);
 
   // Demo mode: update from prop (already throttled at 100ms)
   useEffect(() => {
     if (subscribeToFrames) return; // live mode uses subscription
     if (frame && imgRef.current) {
       imgRef.current.src = frame.url;
-      if (!hasFrame) setHasFrame(true);
     }
     if (frame && timeRef.current) {
       timeRef.current.textContent = new Date(
         frame.timestamp
       ).toLocaleTimeString();
     }
-  }, [frame, subscribeToFrames, hasFrame]);
+  }, [frame, subscribeToFrames]);
 
   return (
-    <div className="relative w-full h-full rounded-xl border border-accent-secondary/40 overflow-hidden bg-bg-surface">
+    <div
+      className={`relative w-full h-full rounded-xl border overflow-hidden bg-bg-surface transition-[border-color,box-shadow] duration-300 ${
+        warningActive
+          ? "border-error/70 shadow-[0_0_0_1px_rgba(212,64,64,0.55),0_0_28px_rgba(212,64,64,0.4),inset_0_0_28px_rgba(212,64,64,0.28)]"
+          : "border-accent-secondary/40 shadow-none"
+      }`}
+    >
       {/* Video frame — img always mounted, hidden until first frame */}
       <img
         ref={imgRef}
@@ -86,32 +95,56 @@ export default function LiveFeed({
 
       {/* Air quality HUD — top right */}
       {airQuality && (
-        <div className="absolute top-3 right-3 bg-bg-primary/80 backdrop-blur-sm border border-accent-secondary/30 rounded-lg p-2.5 min-w-[140px]">
-          <div className="text-[10px] font-mono text-accent-primary mb-1.5 tracking-wider">
+        <div className="absolute top-3 right-3 min-w-[220px] rounded-lg border border-white/10 bg-neutral-700/90 p-3 shadow-lg backdrop-blur-sm">
+          <div className="mb-2 text-[10px] font-mono tracking-[0.24em] text-neutral-200/80">
             AIR QUALITY
           </div>
-          <div className="space-y-0.5 text-[11px] font-mono">
-            <div className="flex justify-between text-text-secondary">
+          <div className="mb-3 rounded-md border border-white/8 bg-black/15 px-3 py-2">
+            <div className="mb-1 text-[10px] font-mono tracking-[0.22em] text-neutral-300/75">
+              CO₂ LIVE
+            </div>
+            <div className="flex items-end gap-2 font-mono">
+              <span className="text-[28px] leading-none text-white">
+                {airQuality.co2.toFixed(0)}
+              </span>
+              <span className="mb-0.5 text-xs uppercase tracking-wide text-neutral-300/70">
+                ppm
+              </span>
+              {co2Trend && (
+                <span
+                  className={`mb-0.5 text-lg leading-none ${
+                    co2Trend === "up" ? "text-error" : "text-accent-primary"
+                  }`}
+                  aria-label={co2Trend === "up" ? "CO2 rising" : "CO2 falling"}
+                  title={co2Trend === "up" ? "CO2 rising" : "CO2 falling"}
+                >
+                  {co2Trend === "up" ? "↑" : "↓"}
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="space-y-1 text-[11px] font-mono">
+            <div className="flex justify-between text-neutral-200/70">
               <span>PM2.5</span>
-              <span className="text-text-primary">
+              <span className="text-white">
                 {airQuality.pm25.toFixed(1)} μg/m³
               </span>
             </div>
-            <div className="flex justify-between text-text-secondary">
-              <span>CO₂</span>
-              <span className="text-text-primary">
-                {airQuality.co2.toFixed(0)} ppm
+            <div className="flex justify-between text-neutral-200/70">
+              <span>PM10</span>
+              <span className="text-white">
+                {airQuality.pm10.toFixed(1)} μg/m³
               </span>
             </div>
-            <div className="flex justify-between text-text-secondary">
+            <div className="flex justify-between text-neutral-200/70">
               <span>Temp</span>
-              <span className="text-text-primary">
+              <span className="text-white">
                 {airQuality.temperature.toFixed(1)}°C
               </span>
             </div>
-            <div className="flex justify-between text-text-secondary">
+            <div className="flex justify-between text-neutral-200/70">
               <span>Humidity</span>
-              <span className="text-text-primary">
+              <span className="text-white">
                 {airQuality.humidity.toFixed(0)}%
               </span>
             </div>

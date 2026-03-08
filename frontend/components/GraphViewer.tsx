@@ -1,9 +1,8 @@
 "use client";
 
-import { useRef, useEffect, useCallback, useState } from "react";
+import { useRef, useEffect, useCallback } from "react";
 import type { GraphNode, GraphEdge } from "@/lib/types";
 import { CONNECTION_DIST, NODE_DRIFT_SPEED, GRAPH_REPULSION_DIST } from "@/lib/constants";
-import NodeTooltip from "./NodeTooltip";
 
 interface GraphViewerProps {
   nodes: GraphNode[];
@@ -17,6 +16,8 @@ interface RenderNode {
   label: string;
   category: string;
   confidence: number;
+  rank: number;
+  crossedOut: boolean;
   firstSeenFrame: number;
   lastSeenFrame: number;
   dataPosition: { x: number; y: number };
@@ -29,6 +30,10 @@ interface RenderNode {
   targetBrightness: number;
   opacity: number;
   targetOpacity: number;
+}
+
+function rankBrightness(rank: number): number {
+  return Math.max(0.65, 1.0 - (rank - 1) * 0.075);
 }
 
 interface SimState {
@@ -63,11 +68,6 @@ export default function GraphViewer({
     canvasH: 400,
   });
   const rafRef = useRef<number>(0);
-  const [tooltipState, setTooltipState] = useState<{
-    node: GraphNode;
-    x: number;
-    y: number;
-  } | null>(null);
 
   // Sync props → simulation state
   useEffect(() => {
@@ -83,6 +83,8 @@ export default function GraphViewer({
         existing.label = node.label;
         existing.category = node.category;
         existing.confidence = node.confidence;
+        existing.rank = node.rank;
+        existing.crossedOut = node.crossedOut;
         existing.firstSeenFrame = node.first_seen_frame;
         existing.lastSeenFrame = node.last_seen_frame;
         existing.dataPosition = { ...node.position };
@@ -126,6 +128,8 @@ export default function GraphViewer({
           label: node.label,
           category: node.category,
           confidence: node.confidence,
+          rank: node.rank,
+          crossedOut: node.crossedOut,
           firstSeenFrame: node.first_seen_frame,
           lastSeenFrame: node.last_seen_frame,
           dataPosition: { ...node.position },
@@ -153,25 +157,6 @@ export default function GraphViewer({
 
     sim.edges = edges;
   }, [nodes, edges]);
-
-  // Update tooltip when selection changes
-  useEffect(() => {
-    if (selectedNodeId) {
-      const renderNode = simRef.current.nodes.get(selectedNodeId);
-      if (renderNode) {
-        const graphNode = nodes.find((n) => n.id === selectedNodeId);
-        if (graphNode) {
-          setTooltipState({
-            node: graphNode,
-            x: renderNode.x,
-            y: renderNode.y,
-          });
-        }
-      }
-    } else {
-      setTooltipState(null);
-    }
-  }, [selectedNodeId, nodes]);
 
   // Canvas setup + animation loop
   useEffect(() => {
@@ -261,9 +246,9 @@ export default function GraphViewer({
 
         // Clamp velocity
         const speed = Math.sqrt(node.vx * node.vx + node.vy * node.vy);
-        if (speed > 1.5) {
-          node.vx = (node.vx / speed) * 1.5;
-          node.vy = (node.vy / speed) * 1.5;
+        if (speed > 0.75) {
+          node.vx = (node.vx / speed) * 0.75;
+          node.vy = (node.vy / speed) * 0.75;
         }
 
         node.x += node.vx;
@@ -307,8 +292,10 @@ export default function GraphViewer({
           node.targetBrightness = 1.0;
         } else if (connectedToHover.has(node.id)) {
           node.targetBrightness = 0.6;
-        } else {
+        } else if (node.crossedOut) {
           node.targetBrightness = baseBrightness();
+        } else {
+          node.targetBrightness = rankBrightness(node.rank);
         }
       }
 
@@ -330,7 +317,7 @@ export default function GraphViewer({
           const dy = b.y - a.y;
           const dist = Math.sqrt(dx * dx + dy * dy);
           if (dist < CONNECTION_DIST) {
-            const alpha = (1 - dist / CONNECTION_DIST) * 0.06 * Math.min(a.opacity, b.opacity);
+            const alpha = (1 - dist / CONNECTION_DIST) * 0.24 * Math.min(a.opacity, b.opacity);
             ctx.strokeStyle = `rgba(80, 180, 140, ${alpha})`;
             ctx.lineWidth = 0.3;
             ctx.beginPath();
@@ -354,7 +341,7 @@ export default function GraphViewer({
           source.id === selectedNodeId ||
           target.id === selectedNodeId;
 
-        const alpha = (isHighlighted ? 0.4 : 0.15) * Math.min(source.opacity, target.opacity);
+        const alpha = Math.min(1, (isHighlighted ? 1.6 : 0.6)) * Math.min(source.opacity, target.opacity);
         ctx.strokeStyle = `rgba(80, 180, 140, ${alpha})`;
         ctx.lineWidth = isHighlighted ? 1 : 0.5;
         ctx.beginPath();
@@ -365,7 +352,7 @@ export default function GraphViewer({
         // Relationship label at midpoint
         const midX = (source.x + target.x) / 2;
         const midY = (source.y + target.y) / 2;
-        const labelAlpha = (isHighlighted ? 0.5 : 0.2) * Math.min(source.opacity, target.opacity);
+        const labelAlpha = Math.min(1, (isHighlighted ? 2.0 : 0.8)) * Math.min(source.opacity, target.opacity);
         ctx.fillStyle = `rgba(100, 200, 170, ${labelAlpha})`;
         ctx.font = '9px "JetBrains Mono", "Fira Code", monospace';
         ctx.textAlign = "center";
@@ -394,7 +381,9 @@ export default function GraphViewer({
         }
 
         // Dot
-        if (brightness > 0.7) {
+        if (node.crossedOut) {
+          ctx.fillStyle = `rgba(160, 80, 80, ${brightness * effectiveAlpha})`;
+        } else if (brightness > 0.7) {
           ctx.fillStyle = `rgba(140, 240, 200, ${brightness * effectiveAlpha})`;
         } else {
           ctx.fillStyle = `rgba(100, 200, 170, ${brightness * effectiveAlpha})`;
@@ -403,25 +392,30 @@ export default function GraphViewer({
         ctx.arc(x, y, r, 0, Math.PI * 2);
         ctx.fill();
 
+        // Red X for crossed-out nodes
+        if (node.crossedOut) {
+          const xSize = 8;
+          ctx.strokeStyle = `rgba(212, 64, 64, ${0.8 * effectiveAlpha})`;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(x - xSize, y - xSize);
+          ctx.lineTo(x + xSize, y + xSize);
+          ctx.moveTo(x + xSize, y - xSize);
+          ctx.lineTo(x - xSize, y + xSize);
+          ctx.stroke();
+        }
+
         // Label
-        ctx.fillStyle = `rgba(140, 240, 200, ${brightness * 0.9 * effectiveAlpha})`;
+        if (node.crossedOut) {
+          ctx.fillStyle = `rgba(212, 64, 64, ${0.6 * effectiveAlpha})`;
+        } else {
+          ctx.fillStyle = `rgba(140, 240, 200, ${Math.min(1, brightness * 3.6) * effectiveAlpha})`;
+        }
         ctx.font = '11px "JetBrains Mono", "Fira Code", monospace';
         ctx.textAlign = "left";
         ctx.textBaseline = "bottom";
         ctx.fillText(node.label, x + r + 4, y - r - 2);
       }
-
-      // Update tooltip position for selected node
-      if (selectedNodeId) {
-        const selNode = sim.nodes.get(selectedNodeId);
-        if (selNode) {
-          setTooltipState((prev) => {
-            if (!prev) return prev;
-            return { ...prev, x: selNode.x, y: selNode.y };
-          });
-        }
-      }
-
       rafRef.current = requestAnimationFrame(tick);
     }
 
@@ -487,14 +481,6 @@ export default function GraphViewer({
         onMouseLeave={handleMouseLeave}
         className="block w-full h-full"
       />
-      {tooltipState && (
-        <NodeTooltip
-          node={tooltipState.node}
-          canvasX={tooltipState.x}
-          canvasY={tooltipState.y}
-          onClose={() => onSelectNode(null)}
-        />
-      )}
     </div>
   );
 }

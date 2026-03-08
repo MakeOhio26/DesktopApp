@@ -7,9 +7,11 @@ import StatusBar from "@/components/StatusBar";
 import GraphViewer from "@/components/GraphViewer";
 import LiveFeed from "@/components/LiveFeed";
 import MissionAssistant from "@/components/MissionAssistant";
+import EntityImagePanel from "@/components/EntityImagePanel";
 
 export default function Dashboard() {
-  const { state, setDemoMode, selectNode, subscribeToFrames } = useRoverConnection();
+  const { state, entityImages, setDemoMode, selectNode, subscribeToFrames, runRoverCommand } =
+    useRoverConnection();
   const [highlightedNodeIds, setHighlightedNodeIds] = useState<string[]>([]);
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -37,7 +39,7 @@ export default function Dashboard() {
   }, []);
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden bg-bg-primary">
+    <div className="relative flex h-screen flex-col overflow-hidden bg-bg-primary">
       {/* Top status bar */}
       <StatusBar
         connected={state.connected}
@@ -46,7 +48,16 @@ export default function Dashboard() {
       />
 
       {/* Main content */}
-      <div className="flex flex-1 min-h-0 p-2 gap-2">
+      <div className="relative flex flex-1 min-h-0 gap-2 p-2">
+        <EntityImagePanel
+          key={entityImages.entity ?? "entity-panel"}
+          entity={entityImages.entity}
+          images={entityImages.images}
+          loading={entityImages.loading}
+          open={state.selectedNodeId !== null}
+          onClose={() => selectNode(null)}
+        />
+
         {/* Left section — 75% */}
         <div className="flex flex-col flex-[3] min-w-0 gap-2">
           {/* Graph viewer — top half */}
@@ -75,6 +86,7 @@ export default function Dashboard() {
             graph={state.graph}
             selectedNodeId={state.selectedNodeId}
             onHighlightNodes={handleHighlightNodes}
+            runRoverCommand={runRoverCommand}
           />
         </div>
       </div>

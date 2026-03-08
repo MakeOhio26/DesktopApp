@@ -1,5 +1,9 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Environment
+
+Copy `.env.example` to `.env.local` and set `GEMINI_API_KEY` before using the Mission Assistant. The browser talks only to the local `/api/assistant` route; the Gemini key stays server-side in the Next app.
+
 ## Getting Started
 
 First, run the development server:

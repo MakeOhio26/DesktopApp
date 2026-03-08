@@ -1,18 +1,31 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import type { GraphNode, GraphEdge } from "@/lib/types";
+import type {
+  AssistantApiRequest,
+  AssistantApiResponse,
+  AssistantConversationContent,
+  AssistantConversationPart,
+  AssistantFunctionCall,
+  GraphEdge,
+  GraphNode,
+  RoverCommandRequest,
+  RoverCommandResult,
+} from "@/lib/types";
 
 interface MissionAssistantProps {
   graph: { nodes: GraphNode[]; edges: GraphEdge[] };
   selectedNodeId: string | null;
   onHighlightNodes: (nodeIds: string[]) => void;
+  runRoverCommand: (request: RoverCommandRequest) => Promise<RoverCommandResult>;
 }
 
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
 }
+
+const MAX_TOOL_ITERATIONS = 8;
 
 function serializeGraph(
   nodes: GraphNode[],
@@ -23,13 +36,11 @@ function serializeGraph(
     (n) =>
       `${n.id}: ${n.label} (category: ${n.category}, confidence: ${(n.confidence * 100).toFixed(0)}%, position: ${n.position.x.toFixed(1)}, ${n.position.y.toFixed(1)})`
   );
-  const edgeLines = edges.map(
-    (e) => {
-      const src = nodes.find((n) => n.id === e.source);
-      const tgt = nodes.find((n) => n.id === e.target);
-      return `${src?.label ?? e.source} --${e.relationship}--> ${tgt?.label ?? e.target}`;
-    }
-  );
+  const edgeLines = edges.map((e) => {
+    const src = nodes.find((n) => n.id === e.source);
+    const tgt = nodes.find((n) => n.id === e.target);
+    return `${src?.label ?? e.source} --${e.relationship}--> ${tgt?.label ?? e.target}`;
+  });
 
   let context = `Objects detected:\n${nodeLines.join("\n")}\n\nSpatial relationships:\n${edgeLines.join("\n")}`;
 
@@ -43,14 +54,14 @@ function serializeGraph(
   return context;
 }
 
-function findMentionedNodes(
-  text: string,
-  nodes: GraphNode[]
-): string[] {
+function findMentionedNodes(text: string, nodes: GraphNode[]): string[] {
   const mentioned: string[] = [];
   for (const node of nodes) {
     if (node.label.length < 3) continue;
-    const regex = new RegExp(`\\b${node.label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+    const regex = new RegExp(
+      `\\b${node.label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
+      "i"
+    );
     if (regex.test(text)) {
       mentioned.push(node.id);
     }
@@ -58,17 +69,87 @@ function findMentionedNodes(
   return mentioned;
 }
 
+function mapToolCallToRequest(
+  toolCall: AssistantFunctionCall
+): { request: RoverCommandRequest; valid: boolean; message?: string } {
+  switch (toolCall.args.action) {
+    case "ping":
+      return { request: { type: "rover_ping" }, valid: true };
+    case "zero":
+      return { request: { type: "rover_zero" }, valid: true };
+    case "stop":
+      return { request: { type: "rover_stop" }, valid: true };
+    case "read_air":
+      return { request: { type: "rover_read_air" }, valid: true };
+    case "read_motion":
+      return { request: { type: "rover_read_motion" }, valid: true };
+    case "rotate":
+      return typeof toolCall.args.degrees === "number"
+        ? {
+            request: { type: "rover_rotate", degrees: toolCall.args.degrees },
+            valid: true,
+          }
+        : {
+            request: { type: "rover_rotate", degrees: 0 },
+            valid: false,
+            message: "Rotate requires a numeric degrees value.",
+          };
+    case "distance":
+      return typeof toolCall.args.centimeters === "number"
+        ? {
+            request: {
+              type: "rover_distance",
+              centimeters: toolCall.args.centimeters,
+            },
+            valid: true,
+          }
+        : {
+            request: { type: "rover_distance", centimeters: 0 },
+            valid: false,
+            message: "Distance requires a numeric centimeters value.",
+          };
+    default:
+      return {
+        request: { type: "rover_ping" },
+        valid: false,
+        message: `Unsupported rover action: ${toolCall.args.action}`,
+      };
+  }
+}
+
+async function postAssistantRequest(
+  payload: AssistantApiRequest
+): Promise<AssistantApiResponse> {
+  const response = await fetch("/api/assistant", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = (await response.json()) as AssistantApiResponse;
+  if (!response.ok) {
+    if (data.kind === "error") {
+      throw new Error(data.message);
+    }
+    throw new Error(`Assistant API error: ${response.status}`);
+  }
+
+  return data;
+}
+
 export default function MissionAssistant({
   graph,
   selectedNodeId,
   onHighlightNodes,
+  runRoverCommand,
 }: MissionAssistantProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom on new messages
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -90,71 +171,96 @@ export default function MissionAssistant({
     );
 
     try {
-      const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY ?? "";
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            system_instruction: {
-              parts: [
-                {
-                  text: "You are a mission assistant for a building inspection rover. You answer questions about objects detected during the mission based on the knowledge graph provided. Reference objects by name, describe their spatial relationships, and be concise. If asked where something is, describe its position relative to other objects.",
-                },
-              ],
-            },
-            contents: [
-              {
-                role: "user",
-                parts: [
-                  {
-                    text: `${graphContext}\n\nQuestion: ${text}`,
-                  },
-                ],
-              },
-            ],
-            generationConfig: {
-              maxOutputTokens: 1024,
-            },
-          }),
-        }
-      );
+      let payload: AssistantApiRequest = {
+        userText: text,
+        graphContext,
+      };
+      let assistantText = "";
 
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
+      for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+        const response = await postAssistantRequest(payload);
+
+        if (response.kind === "error") {
+          throw new Error(response.message);
+        }
+
+        if (response.kind === "final") {
+          assistantText =
+            response.text || "Sorry, I could not generate a response.";
+          break;
+        }
+
+        if (response.toolCalls.length === 0) {
+          throw new Error("Assistant requested a tool step with no tool calls.");
+        }
+
+        const functionResponseParts: AssistantConversationPart[] = [];
+        for (const toolCall of response.toolCalls) {
+          const mapped = mapToolCallToRequest(toolCall);
+          const result = mapped.valid
+            ? await runRoverCommand(mapped.request)
+            : {
+                ok: false,
+                request: mapped.request,
+                message: mapped.message,
+              };
+
+          functionResponseParts.push({
+            functionResponse: {
+              name: "rover_command",
+              response: {
+                result,
+              },
+            },
+          });
+        }
+
+        const conversation: AssistantConversationContent[] = [
+          ...response.conversation,
+          {
+            role: "user",
+            parts: functionResponseParts,
+          },
+        ];
+
+        payload = { conversation };
       }
 
-      const data = await response.json();
-      const assistantText =
-        data.candidates?.[0]?.content?.parts?.[0]?.text ??
-        "Sorry, I could not generate a response.";
+      if (!assistantText) {
+        throw new Error("Assistant did not return a final response.");
+      }
 
       setMessages((prev) => [
         ...prev,
         { role: "assistant", content: assistantText },
       ]);
 
-      // Scan for mentioned nodes and highlight them
       const mentioned = findMentionedNodes(assistantText, graph.nodes);
       if (mentioned.length > 0) {
         onHighlightNodes(mentioned);
       }
-    } catch {
+    } catch (error) {
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
           content:
-            "Unable to reach the assistant. Ensure the API proxy is configured.",
+            error instanceof Error
+              ? error.message
+              : "Unable to reach the assistant. Ensure the API route is configured.",
         },
       ]);
     } finally {
       setLoading(false);
     }
-  }, [input, loading, graph, selectedNodeId, onHighlightNodes]);
+  }, [
+    graph,
+    input,
+    loading,
+    onHighlightNodes,
+    runRoverCommand,
+    selectedNodeId,
+  ]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -168,21 +274,19 @@ export default function MissionAssistant({
 
   return (
     <div className="flex flex-col h-full rounded-xl border border-accent-secondary/40 bg-bg-panel shadow-[-4px_0_24px_rgba(0,0,0,0.5)]">
-      {/* Header */}
       <div className="px-4 py-3 border-b border-accent-secondary/30">
         <h2 className="text-sm font-semibold text-accent-primary tracking-wide">
           Mission Assistant
         </h2>
       </div>
 
-      {/* Chat history */}
       <div
         ref={scrollRef}
         className="flex-1 overflow-y-auto px-3 py-3 space-y-3"
       >
         {messages.length === 0 && (
           <div className="text-center text-text-secondary text-xs font-mono pt-8">
-            Ask questions about detected objects and their spatial relationships.
+            Ask about the environment or tell the rover what to do.
           </div>
         )}
         {messages.map((msg, i) => (
@@ -212,7 +316,6 @@ export default function MissionAssistant({
         )}
       </div>
 
-      {/* Input */}
       <div className="p-3 border-t border-accent-secondary/30">
         <div className="flex gap-2">
           <input
@@ -220,7 +323,7 @@ export default function MissionAssistant({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask about the environment..."
+            placeholder="Ask about the environment or command the rover..."
             disabled={loading}
             className="flex-1 bg-bg-surface border border-accent-secondary/40 rounded-lg px-3 py-2 text-sm text-text-primary placeholder:text-text-secondary/60 focus:outline-none focus:border-accent-primary/60 transition-colors duration-200 disabled:opacity-50"
           />
