@@ -481,7 +481,7 @@ export function useRoverConnection() {
         demoMode: false,
         latestFrame: null,
         graph: liveGraph,
-        airQuality: liveAirQuality,
+        airQuality: liveAirQuality ?? demoState.airQuality,
         selectedNodeId,
       };
 

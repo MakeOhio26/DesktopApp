@@ -95,7 +95,7 @@ export default function LiveFeed({
 
       {/* Air quality HUD — top right */}
       {airQuality && (
-        <div className="absolute top-3 right-3 min-w-[220px] rounded-lg border border-white/10 bg-neutral-700/90 p-3 shadow-lg backdrop-blur-sm">
+        <div className="absolute top-3 right-3 z-10 min-w-[220px] rounded-lg border border-white/10 bg-neutral-700/90 p-3 shadow-lg backdrop-blur-sm">
           <div className="mb-2 text-[10px] font-mono tracking-[0.24em] text-neutral-200/80">
             AIR QUALITY
           </div>
@@ -154,7 +154,7 @@ export default function LiveFeed({
 
       {/* Frame info — bottom left */}
       {hasFrame && (
-        <div className="absolute bottom-3 left-3 bg-bg-primary/70 backdrop-blur-sm rounded px-2 py-1">
+        <div className="absolute bottom-3 left-3 z-10 bg-bg-primary/70 backdrop-blur-sm rounded px-2 py-1">
           <span
             ref={timeRef}
             className="text-[10px] font-mono text-text-secondary"
